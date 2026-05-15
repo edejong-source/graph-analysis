@@ -14,6 +14,9 @@ export type SubtypeInfo = {
   desc: string
   anl: Analyses
   nlp: boolean
+  // Whether edge-subsampling bootstrap (Bootstrap.ts) is meaningful for this analysis.
+  // False for NLP analyses (don't use edges) and Co-Citations (reads metadataCache directly).
+  supportsBootstrap: boolean
 }
 
 export type Analyses =
@@ -44,6 +47,30 @@ export interface Communities {
 }
 export interface ResultMap {
   [to: string]: { measure: number; extra: string[] }
+}
+
+// Per-node summary of B bootstrap resamples. See src/Bootstrap.ts.
+export interface BootstrapAggregate {
+  median: number
+  mean: number
+  ci_lo: number    // 2.5th percentile
+  ci_hi: number    // 97.5th percentile
+  stability: number // top-10 frequency in [0, 1]
+  n: number        // number of resamples that produced a finite value
+}
+
+export type BootstrapScalarMap = { [to: string]: BootstrapAggregate }
+
+export interface BootstrapHITSResult {
+  authorities: BootstrapScalarMap
+  hubs: BootstrapScalarMap
+}
+
+export interface BootstrapOptions {
+  iterations: number
+  fraction: number
+  seed: number
+  yieldEvery: number
 }
 
 export type HITSResult = {
@@ -102,6 +129,11 @@ export interface GraphAnalysisSettings {
   exclusionRegex: string
   exclusionTags: string[]
   algsToShow: Subtype[]
+  // Edge-subsampling bootstrap defaults (per-view toggle in SubtypeOptions).
+  bootstrapEnabledDefault: boolean
+  bootstrapIterations: number
+  bootstrapFraction: number
+  bootstrapSeed: number
 }
 
 export interface NLPPlugin {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { App } from 'obsidian'
-  import { hoverPreview, isLinked } from 'obsidian-community-lib'
+  import { hoverPreview, isInVault, isLinked } from 'obsidian-community-lib'
   import type AnalysisView from 'src/AnalysisView'
   import { ANALYSIS_TYPES, ICON, MEASURE, NODE } from 'src/Constants'
   import type {
@@ -9,6 +9,7 @@
     Subtype,
   } from 'src/Interfaces'
   import type GraphAnalysisPlugin from 'src/main'
+  import { bootstrapCommunityCoMembership } from 'src/Bootstrap'
   import {
     classExt,
     classLinked,
@@ -37,14 +38,23 @@
     comm: string[]
   }
 
+  interface CoMembershipRow {
+    to: string
+    prob: number
+    resolved: boolean
+  }
+
   let { resolvedLinks } = app.metadataCache
 
   $: currSubtypeInfo = ANALYSIS_TYPES.find((sub) => sub.subtype === currSubtype)
   let ascOrder = false
+  let bootstrapEnabled = settings.bootstrapEnabledDefault
+  let progress = 1
   let size = 50
   let current_component: HTMLElement
   let newBatch: ComponentResults[] = []
   let visibleData: ComponentResults[] = []
+  let coMembershipRows: CoMembershipRow[] = []
   let page = 0
   let blockSwitch = false
 
@@ -66,33 +76,57 @@
 
   $: promiseSortedResults = !plugin.g
     ? null
-    : plugin.g.algs[currSubtype]('', { iterations: its })
-        .then((comms: Communities) => {
-          const greater = ascOrder ? 1 : -1
-          const lesser = ascOrder ? -1 : 1
-
-          const componentResults: ComponentResults[] = []
-          Object.keys(comms).forEach((label) => {
-            let comm = comms[label]
-            if (comm.length > 1) {
-              componentResults.push({
-                label,
-                comm,
-              })
+    : (bootstrapEnabled && currNode
+        ? (progress = 0,
+          bootstrapCommunityCoMembership(
+            plugin.g,
+            'Label Propagation',
+            currNode,
+            {
+              iterations: plugin.settings.bootstrapIterations,
+              fraction: plugin.settings.bootstrapFraction,
+              seed: plugin.settings.bootstrapSeed,
+              yieldEvery: 10,
+            },
+            (d, t) => (progress = d / t),
+          ).then((agg) => {
+            const rows: CoMembershipRow[] = []
+            for (const to in agg) {
+              if (agg[to].prob < 0.1) continue
+              if (to === currNode) continue
+              const resolved = !to.endsWith('.md') || isInVault(app, to)
+              rows.push({ to, prob: agg[to].prob, resolved })
             }
-          })
-          componentResults.sort((a, b) =>
-            a.comm.length > b.comm.length ? greater : lesser
+            rows.sort((a, b) => b.prob - a.prob)
+            coMembershipRows = rows
+            return [] as ComponentResults[]
+          }))
+        : plugin.g.algs[currSubtype]('', { iterations: its }).then(
+            (comms: Communities) => {
+              const greater = ascOrder ? 1 : -1
+              const lesser = ascOrder ? -1 : 1
+
+              const componentResults: ComponentResults[] = []
+              Object.keys(comms).forEach((label) => {
+                let comm = comms[label]
+                if (comm.length > 1) {
+                  componentResults.push({ label, comm })
+                }
+              })
+              componentResults.sort((a, b) =>
+                a.comm.length > b.comm.length ? greater : lesser,
+              )
+              coMembershipRows = []
+              return componentResults
+            },
           )
-          return componentResults
-        })
-        .then((res) => {
-          newBatch = res.slice(0, size)
-          setTimeout(() => {
-            blockSwitch = false
-          }, 100)
-          return res
-        })
+      ).then((res: ComponentResults[]) => {
+        newBatch = res.slice(0, size)
+        setTimeout(() => {
+          blockSwitch = false
+        }, 100)
+        return res
+      })
 
   $: visibleData = [...visibleData, ...newBatch]
 
@@ -112,6 +146,7 @@
         bind:visibleData
         bind:promiseSortedResults
         bind:page
+        bind:bootstrapEnabled
         {plugin}
         {view}
         {app}
@@ -140,9 +175,35 @@
       />
     </span>
   </div>
+  {#if bootstrapEnabled && progress < 1}
+    <div class="GA-progress-track">
+      <div class="GA-progress-bar" style="width: {(progress * 100).toFixed(1)}%" />
+    </div>
+  {/if}
   {#if promiseSortedResults}
     {#await promiseSortedResults then sortedResults}
       {#key sortedResults}
+        {#if bootstrapEnabled}
+          <div class="GA-coMembership">
+            <p class="GA-coMembership-hint">
+              Notes most often grouped with <strong>{presentPath(currNode ?? '')}</strong>
+              across {plugin.settings.bootstrapIterations} edge-subsampled resamples.
+            </p>
+            {#each coMembershipRows as row}
+              <div
+                class="{NODE}
+                  {classResolved(app, row.to)}
+                  {classExt(row.to)}"
+                on:click={async (e) => await openOrSwitch(app, row.to, e)}
+                on:mouseover={(e) => hoverPreview(e, view, row.to)}
+              >
+                <ExtensionIcon path={row.to} />
+                <span class="internal-link">{presentPath(row.to)}</span>
+                <span class={MEASURE}>{(row.prob * 100).toFixed(0)}%</span>
+              </div>
+            {/each}
+          </div>
+        {:else}
         {#each visibleData as comm}
           <div class="GA-CC">
             <details class="tree-item-self">
@@ -208,6 +269,7 @@
           }}
         />
         {visibleData.length} / {sortedResults.length}
+        {/if}
       {/key}
     {/await}
   {/if}
@@ -273,5 +335,29 @@
 
   .currNode {
     font-weight: bold;
+  }
+  .GA-coMembership-hint {
+    color: var(--text-muted);
+    font-size: var(--font-size-secondary);
+    margin: 4px 0 8px 0;
+  }
+  .GA-coMembership > div {
+    padding: 2px 4px;
+    cursor: pointer;
+  }
+  .GA-coMembership > div:hover {
+    background-color: var(--background-secondary-alt);
+  }
+  .GA-progress-track {
+    height: 3px;
+    background-color: var(--background-modifier-border);
+    margin: 4px 0;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .GA-progress-bar {
+    height: 100%;
+    background-color: var(--interactive-accent);
+    transition: width 0.1s linear;
   }
 </style>

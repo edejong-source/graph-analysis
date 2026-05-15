@@ -2,9 +2,10 @@
   import type { App } from 'obsidian'
   import { hoverPreview, isInVault, isLinked } from 'obsidian-community-lib'
   import type AnalysisView from 'src/AnalysisView'
-  import { ANALYSIS_TYPES, ICON, LINKED, NOT_LINKED } from 'src/Constants'
+  import { ANALYSIS_TYPES, ICON, LINKED, MEASURE, NOT_LINKED } from 'src/Constants'
   import type { GraphAnalysisSettings, Subtype } from 'src/Interfaces'
   import type GraphAnalysisPlugin from 'src/main'
+  import { bootstrapCommunityCoMembership } from 'src/Bootstrap'
   import {
     classExt,
     dropPath,
@@ -29,6 +30,8 @@
 
   $: currSubtypeInfo = ANALYSIS_TYPES.find((sub) => sub.subtype === currSubtype)
   let frozen = false
+  let bootstrapEnabled = settings.bootstrapEnabledDefault
+  let progress = 1
   let currFile = app.workspace.getActiveFile()
 
   let resolution = 10
@@ -37,6 +40,7 @@
     to: string
     resolved: boolean
     img: Promise<ArrayBuffer> | null
+    prob?: number
   }
 
   $: currNode = currFile?.path
@@ -68,32 +72,56 @@
   $: promiseSortedResults =
     !plugin.g || !currNode
       ? null
-      : plugin.g.algs['Louvain'](currNode, { resolution })
-          .then((results: string[]) => {
-            const componentResults: ComponentResults[] = []
-            results.forEach((to) => {
-              const resolved = !to.endsWith('.md') || isInVault(app, to)
-              const linked = isLinked(resolvedLinks, currNode, to, false)
-              const img =
-                plugin.settings.showImgThumbnails && isImg(to)
-                  ? getImgBufferPromise(app, to)
-                  : null
-              componentResults.push({
-                linked,
-                to,
-                resolved,
-                img,
-              })
-            })
-            return componentResults
-          })
-          .then((res) => {
-            newBatch = res.slice(0, size)
-            setTimeout(() => {
-              blockSwitch = false
-            }, 100)
-            return res
-          })
+      : (bootstrapEnabled
+          ? (progress = 0,
+            bootstrapCommunityCoMembership(
+              plugin.g,
+              'Louvain',
+              currNode,
+              {
+                iterations: plugin.settings.bootstrapIterations,
+                fraction: plugin.settings.bootstrapFraction,
+                seed: plugin.settings.bootstrapSeed,
+                yieldEvery: 10,
+              },
+              (d, t) => (progress = d / t),
+            ).then((agg) => {
+              const rows: ComponentResults[] = []
+              for (const to in agg) {
+                if (agg[to].prob < 0.1) continue
+                const resolved = !to.endsWith('.md') || isInVault(app, to)
+                const linked = isLinked(resolvedLinks, currNode, to, false)
+                const img =
+                  plugin.settings.showImgThumbnails && isImg(to)
+                    ? getImgBufferPromise(app, to)
+                    : null
+                rows.push({ linked, to, resolved, img, prob: agg[to].prob })
+              }
+              rows.sort((a, b) => (b.prob ?? 0) - (a.prob ?? 0))
+              return rows
+            }))
+          : plugin.g.algs['Louvain'](currNode, { resolution }).then(
+              (results: string[]) => {
+                const componentResults: ComponentResults[] = []
+                results.forEach((to) => {
+                  const resolved = !to.endsWith('.md') || isInVault(app, to)
+                  const linked = isLinked(resolvedLinks, currNode, to, false)
+                  const img =
+                    plugin.settings.showImgThumbnails && isImg(to)
+                      ? getImgBufferPromise(app, to)
+                      : null
+                  componentResults.push({ linked, to, resolved, img })
+                })
+                return componentResults
+              },
+            )
+        ).then((res: ComponentResults[]) => {
+          newBatch = res.slice(0, size)
+          setTimeout(() => {
+            blockSwitch = false
+          }, 100)
+          return res
+        })
 
   $: visibleData = [...visibleData, ...newBatch]
 
@@ -114,7 +142,14 @@
   bind:visibleData
   bind:promiseSortedResults
   bind:page
+  bind:bootstrapEnabled
 />
+
+{#if bootstrapEnabled && progress < 1}
+  <div class="GA-progress-track">
+    <div class="GA-progress-bar" style="width: {(progress * 100).toFixed(1)}%" />
+  </div>
+{/if}
 
 <label for="resolution">Resolution: </label>
 <input
@@ -167,6 +202,9 @@
                 >
                   {presentPath(node.to)}
                 </span>
+                {#if bootstrapEnabled && node.prob !== undefined}
+                  <span class={MEASURE}>{(node.prob * 100).toFixed(0)}%</span>
+                {/if}
                 {#if isImg(node.to)}
                   <ImgThumbnail img={node.img} />
                 {/if}
@@ -203,5 +241,25 @@
 
   .GA-node {
     overflow: hidden;
+  }
+  span.GA-measure {
+    background-color: var(--background-secondary-alt);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+    line-height: 12px;
+    margin-left: 6px;
+  }
+  .GA-progress-track {
+    height: 3px;
+    background-color: var(--background-modifier-border);
+    margin: 4px 0;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .GA-progress-bar {
+    height: 100%;
+    background-color: var(--interactive-accent);
+    transition: width 0.1s linear;
   }
 </style>

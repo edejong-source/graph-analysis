@@ -28,6 +28,7 @@
   export let visibleData: any[]
   export let promiseSortedResults: Promise<any[]>
   export let page: number
+  export let bootstrapEnabled: boolean = undefined
 </script>
 
 <span class="GA-Subtype-Options">
@@ -138,6 +139,27 @@
       </span>
     </span>
   {/if}
+  {#if bootstrapEnabled !== undefined && currSubtypeInfo.supportsBootstrap}
+    <span
+      class="GA-Option-span GA-bootstrap-toggle"
+      class:active={bootstrapEnabled}
+      aria-label={bootstrapEnabled
+        ? `Uncertainty ON (${plugin.settings.bootstrapIterations} resamples @ ${Math.round(plugin.settings.bootstrapFraction * 100)}% edges)`
+        : 'Uncertainty OFF — click to show bootstrap CIs'}
+      on:click={() => {
+        bootstrapEnabled = !bootstrapEnabled
+        if (!frozen) {
+          blockSwitch = true
+          newBatch = []
+          visibleData = []
+          promiseSortedResults = null
+          page = 0
+        }
+      }}
+    >
+      <span class="icon-text">{bootstrapEnabled ? '±' : '~'}</span>
+    </span>
+  {/if}
   <span
     class="GA-Option-span"
     aria-label="Refresh Index"
@@ -166,5 +188,19 @@
 
   .GA-Option-span {
     padding: 2px;
+  }
+  .GA-bootstrap-toggle .icon-text {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    text-align: center;
+    line-height: 20px;
+    font-weight: 700;
+    color: var(--text-muted);
+    border-radius: 3px;
+  }
+  .GA-bootstrap-toggle.active .icon-text {
+    color: var(--text-on-accent);
+    background-color: var(--interactive-accent);
   }
 </style>

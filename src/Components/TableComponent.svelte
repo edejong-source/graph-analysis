@@ -15,6 +15,7 @@
     Subtype,
   } from 'src/Interfaces'
   import type GraphAnalysisPlugin from 'src/main'
+  import { bootstrapScalar } from 'src/Bootstrap'
   import {
     classExt,
     dropPath,
@@ -41,6 +42,8 @@
   let frozen = false
   let ascOrder = false
   let { noInfinity, noZero } = settings
+  let bootstrapEnabled = settings.bootstrapEnabledDefault
+  let progress = 1
   let currFile = app.workspace.getActiveFile()
 
   interface ComponentResults {
@@ -50,6 +53,10 @@
     resolved: boolean
     extra: string[]
     img: Promise<ArrayBuffer> | null
+    ci_lo?: number
+    ci_hi?: number
+    stability?: number
+    n?: number
   }
 
   $: currNode = currFile?.path
@@ -78,55 +85,100 @@
     currNode = currFile?.path
   })
 
+  function buildRowsFromPointEstimate(results: ResultMap): ComponentResults[] {
+    const greater = ascOrder ? 1 : -1
+    const lesser = ascOrder ? -1 : 1
+    const componentResults: ComponentResults[] = []
+
+    Object.keys(results).forEach((to) => {
+      const { measure, extra } = results[to]
+      if (
+        !(noInfinity && measure === Infinity) &&
+        !(noZero && measure === 0)
+      ) {
+        const resolved = !to.endsWith('.md') || isInVault(app, to)
+        const linked = isLinked(resolvedLinks, currNode, to, false)
+        const img =
+          plugin.settings.showImgThumbnails && isImg(to)
+            ? getImgBufferPromise(app, to)
+            : null
+        componentResults.push({ measure, linked, to, resolved, extra, img })
+      }
+    })
+    componentResults.sort((a, b) => {
+      return a.measure === b.measure
+        ? a.extra?.length > b.extra?.length
+          ? greater
+          : lesser
+        : a.measure > b.measure
+        ? greater
+        : lesser
+    })
+    return componentResults
+  }
+
+  function buildRowsFromBootstrap(
+    agg: { [to: string]: { median: number; ci_lo: number; ci_hi: number; stability: number; n: number } },
+  ): ComponentResults[] {
+    const greater = ascOrder ? 1 : -1
+    const lesser = ascOrder ? -1 : 1
+    const componentResults: ComponentResults[] = []
+    Object.keys(agg).forEach((to) => {
+      const { median, ci_lo, ci_hi, stability, n } = agg[to]
+      if (!(noInfinity && !Number.isFinite(median)) && !(noZero && median === 0)) {
+        const resolved = !to.endsWith('.md') || isInVault(app, to)
+        const linked = isLinked(resolvedLinks, currNode, to, false)
+        const img =
+          plugin.settings.showImgThumbnails && isImg(to)
+            ? getImgBufferPromise(app, to)
+            : null
+        componentResults.push({
+          measure: median,
+          linked,
+          to,
+          resolved,
+          extra: [],
+          img,
+          ci_lo,
+          ci_hi,
+          stability,
+          n,
+        })
+      }
+    })
+    componentResults.sort((a, b) => {
+      return a.measure === b.measure ? lesser : a.measure > b.measure ? greater : lesser
+    })
+    return componentResults
+  }
+
   $: promiseSortedResults =
     !plugin.g || !currNode
       ? null
-      : plugin.g.algs[currSubtype](currNode)
-          .then((results: ResultMap) => {
-            const greater = ascOrder ? 1 : -1
-            const lesser = ascOrder ? -1 : 1
-            const componentResults: ComponentResults[] = []
-
-            Object.keys(results).forEach((to) => {
-              const { measure, extra } = (results as ResultMap)[to]
-              if (
-                !(noInfinity && measure === Infinity) &&
-                !(noZero && measure === 0)
-              ) {
-                const resolved = !to.endsWith('.md') || isInVault(app, to)
-                const linked = isLinked(resolvedLinks, currNode, to, false)
-                const img =
-                  plugin.settings.showImgThumbnails && isImg(to)
-                    ? getImgBufferPromise(app, to)
-                    : null
-                componentResults.push({
-                  measure,
-                  linked,
-                  to,
-                  resolved,
-                  extra,
-                  img,
-                })
-              }
-            })
-            componentResults.sort((a, b) => {
-              return a.measure === b.measure
-                ? a.extra?.length > b.extra?.length
-                  ? greater
-                  : lesser
-                : a.measure > b.measure
-                ? greater
-                : lesser
-            })
-            return componentResults
-          })
-          .then((res) => {
-            newBatch = res.slice(0, size)
-            setTimeout(() => {
-              blockSwitch = false
-            }, 100)
-            return res
-          })
+      : (bootstrapEnabled && currSubtypeInfo?.supportsBootstrap
+          ? (progress = 0,
+            bootstrapScalar(
+              plugin.g,
+              currSubtype,
+              currNode,
+              {
+                iterations: plugin.settings.bootstrapIterations,
+                fraction: plugin.settings.bootstrapFraction,
+                seed: plugin.settings.bootstrapSeed,
+                yieldEvery: 20,
+              },
+              (d, t) => (progress = d / t),
+            ).then(buildRowsFromBootstrap))
+          : plugin.g.algs[currSubtype](currNode).then((r) =>
+              buildRowsFromPointEstimate(r as ResultMap),
+            )
+        ).then((res: ComponentResults[]) => {
+          newBatch = res.slice(0, size)
+          setTimeout(() => {
+            blockSwitch = false
+          }, 100)
+          return res
+        })
 
   $: visibleData = [...visibleData, ...newBatch]
 
@@ -149,13 +201,24 @@
   bind:visibleData
   bind:promiseSortedResults
   bind:page
+  bind:bootstrapEnabled
 />
+
+{#if bootstrapEnabled && currSubtypeInfo?.supportsBootstrap && progress < 1}
+  <div class="GA-progress-track">
+    <div class="GA-progress-bar" style="width: {(progress * 100).toFixed(1)}%" />
+  </div>
+{/if}
 
 <table class="GA-table markdown-preview-view" bind:this={current_component}>
   <thead>
     <tr>
       <th scope="col">Note</th>
-      <th scope="col">Value</th>
+      <th scope="col">{bootstrapEnabled && currSubtypeInfo?.supportsBootstrap ? 'Median' : 'Value'}</th>
+      {#if bootstrapEnabled && currSubtypeInfo?.supportsBootstrap}
+        <th scope="col" aria-label="95% bootstrap confidence interval">95% CI</th>
+        <th scope="col" aria-label="Fraction of resamples where this note ranked in the top 10">Top-10</th>
+      {/if}
     </tr>
   </thead>
   {#if promiseSortedResults}
@@ -192,7 +255,14 @@
                   <ImgThumbnail img={node.img} />
                 {/if}
               </td>
-              <td class={MEASURE}>{node.measure}</td>
+              <td class={MEASURE}>{Number.isFinite(node.measure) ? node.measure.toFixed(4) : '∞'}</td>
+              {#if bootstrapEnabled && currSubtypeInfo?.supportsBootstrap}
+                <td class={MEASURE}>
+                  [{Number.isFinite(node.ci_lo) ? node.ci_lo.toFixed(3) : '∞'},
+                  {Number.isFinite(node.ci_hi) ? node.ci_hi.toFixed(3) : '∞'}]
+                </td>
+                <td class={MEASURE}>{((node.stability ?? 0) * 100).toFixed(0)}%</td>
+              {/if}
             </tr>
           {/if}
         {/each}
@@ -236,5 +306,18 @@
 
   .GA-node {
     overflow: hidden;
+  }
+
+  .GA-progress-track {
+    height: 3px;
+    background-color: var(--background-modifier-border);
+    margin: 4px 0;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .GA-progress-bar {
+    height: 100%;
+    background-color: var(--interactive-accent);
+    transition: width 0.1s linear;
   }
 </style>

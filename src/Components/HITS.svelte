@@ -10,11 +10,13 @@
     NOT_LINKED,
   } from 'src/Constants'
   import type {
+    BootstrapHITSResult,
     GraphAnalysisSettings,
     HITSResult,
     Subtype,
   } from 'src/Interfaces'
   import type GraphAnalysisPlugin from 'src/main'
+  import { bootstrapHITS } from 'src/Bootstrap'
   import {
     classExt,
     dropPath,
@@ -43,6 +45,8 @@
   let sortBy = true
   let ascOrder = false
   let { noInfinity, noZero } = settings
+  let bootstrapEnabled = settings.bootstrapEnabledDefault
+  let progress = 1
   let currFile = app.workspace.getActiveFile()
 
   interface ComponentResults {
@@ -51,6 +55,12 @@
     to: string
     resolved: boolean
     img: Promise<ArrayBuffer> | null
+    auth_ci_lo?: number
+    auth_ci_hi?: number
+    auth_stability?: number
+    hub_ci_lo?: number
+    hub_ci_hi?: number
+    hub_stability?: number
   }
 
   $: currNode = currFile?.path
@@ -72,53 +82,87 @@
 
   onMount(() => {})
 
+  function sortAndFinalize(componentResults: ComponentResults[]): ComponentResults[] {
+    const greater = ascOrder ? 1 : -1
+    const lesser = ascOrder ? -1 : 1
+    componentResults.sort((a, b) => {
+      return sortBy
+        ? a.authority > b.authority
+          ? greater
+          : lesser
+        : a.hub > b.hub
+        ? greater
+        : lesser
+    })
+    return componentResults
+  }
+
   $: promiseSortedResults = !plugin.g
     ? null
-    : plugin.g.algs['HITS']('')
-        .then((results: HITSResult) => {
-          console.log('hits')
-          const componentResults: ComponentResults[] = []
-
-          plugin.g.forEachNode((to) => {
-            const authority = roundNumber(results.authorities[to])
-            const hub = roundNumber(results.hubs[to])
-            if (!(authority === 0 && hub === 0)) {
-              const resolved = !to.endsWith('.md') || isInVault(app, to)
-
-              const img =
-                plugin.settings.showImgThumbnails && isImg(to)
-                  ? getImgBufferPromise(app, to)
-                  : null
-
-              componentResults.push({
-                authority,
-                hub,
-                to,
-                resolved,
-                img,
-              })
-            }
+    : (bootstrapEnabled
+        ? (progress = 0,
+          bootstrapHITS(
+            plugin.g,
+            {
+              iterations: plugin.settings.bootstrapIterations,
+              fraction: plugin.settings.bootstrapFraction,
+              seed: plugin.settings.bootstrapSeed,
+              yieldEvery: 10,
+            },
+            (d, t) => (progress = d / t),
+          ).then((agg: BootstrapHITSResult) => {
+            const componentResults: ComponentResults[] = []
+            plugin.g.forEachNode((to) => {
+              const authAgg = agg.authorities[to]
+              const hubAgg = agg.hubs[to]
+              const authority = roundNumber(authAgg?.median ?? 0)
+              const hub = roundNumber(hubAgg?.median ?? 0)
+              if (!(authority === 0 && hub === 0)) {
+                const resolved = !to.endsWith('.md') || isInVault(app, to)
+                const img =
+                  plugin.settings.showImgThumbnails && isImg(to)
+                    ? getImgBufferPromise(app, to)
+                    : null
+                componentResults.push({
+                  authority,
+                  hub,
+                  to,
+                  resolved,
+                  img,
+                  auth_ci_lo: authAgg?.ci_lo,
+                  auth_ci_hi: authAgg?.ci_hi,
+                  auth_stability: authAgg?.stability,
+                  hub_ci_lo: hubAgg?.ci_lo,
+                  hub_ci_hi: hubAgg?.ci_hi,
+                  hub_stability: hubAgg?.stability,
+                })
+              }
+            })
+            return sortAndFinalize(componentResults)
+          }))
+        : plugin.g.algs['HITS']('').then((results: HITSResult) => {
+            const componentResults: ComponentResults[] = []
+            plugin.g.forEachNode((to) => {
+              const authority = roundNumber(results.authorities[to])
+              const hub = roundNumber(results.hubs[to])
+              if (!(authority === 0 && hub === 0)) {
+                const resolved = !to.endsWith('.md') || isInVault(app, to)
+                const img =
+                  plugin.settings.showImgThumbnails && isImg(to)
+                    ? getImgBufferPromise(app, to)
+                    : null
+                componentResults.push({ authority, hub, to, resolved, img })
+              }
+            })
+            return sortAndFinalize(componentResults)
           })
-          const greater = ascOrder ? 1 : -1
-          const lesser = ascOrder ? -1 : 1
-          componentResults.sort((a, b) => {
-            return sortBy
-              ? a.authority > b.authority
-                ? greater
-                : lesser
-              : a.hub > b.hub
-              ? greater
-              : lesser
-          })
-          return componentResults
-        })
-        .then((res) => {
-          newBatch = res.slice(0, size)
-          setTimeout(() => {
-            blockSwitch = false
-          }, 100)
-          return res
-        })
+      ).then((res: ComponentResults[]) => {
+        newBatch = res.slice(0, size)
+        setTimeout(() => {
+          blockSwitch = false
+        }, 100)
+        return res
+      })
 
   $: visibleData = [...visibleData, ...newBatch]
 
@@ -141,14 +185,29 @@
   bind:visibleData
   bind:promiseSortedResults
   bind:page
+  bind:bootstrapEnabled
 />
+
+{#if bootstrapEnabled && progress < 1}
+  <div class="GA-progress-track">
+    <div class="GA-progress-bar" style="width: {(progress * 100).toFixed(1)}%" />
+  </div>
+{/if}
 
 <table class="GA-table markdown-preview-view" bind:this={current_component}>
   <thead>
     <tr>
       <th scope="col">Note</th>
       <th scope="col">Authority</th>
+      {#if bootstrapEnabled}
+        <th scope="col" aria-label="95% bootstrap CI for authority">CI (A)</th>
+        <th scope="col" aria-label="Top-10 frequency for authority">Top-10 (A)</th>
+      {/if}
       <th scope="col">Hub</th>
+      {#if bootstrapEnabled}
+        <th scope="col" aria-label="95% bootstrap CI for hub">CI (H)</th>
+        <th scope="col" aria-label="Top-10 frequency for hub">Top-10 (H)</th>
+      {/if}
     </tr>
   </thead>
   {#if promiseSortedResults}
@@ -180,7 +239,21 @@
                 {/if}
               </td>
               <td class={MEASURE}>{node.authority}</td>
+              {#if bootstrapEnabled}
+                <td class={MEASURE}>
+                  [{Number.isFinite(node.auth_ci_lo) ? node.auth_ci_lo.toFixed(3) : '—'},
+                  {Number.isFinite(node.auth_ci_hi) ? node.auth_ci_hi.toFixed(3) : '—'}]
+                </td>
+                <td class={MEASURE}>{((node.auth_stability ?? 0) * 100).toFixed(0)}%</td>
+              {/if}
               <td class={MEASURE}>{node.hub}</td>
+              {#if bootstrapEnabled}
+                <td class={MEASURE}>
+                  [{Number.isFinite(node.hub_ci_lo) ? node.hub_ci_lo.toFixed(3) : '—'},
+                  {Number.isFinite(node.hub_ci_hi) ? node.hub_ci_hi.toFixed(3) : '—'}]
+                </td>
+                <td class={MEASURE}>{((node.hub_stability ?? 0) * 100).toFixed(0)}%</td>
+              {/if}
             </tr>
           {/if}
         {/each}
@@ -228,5 +301,18 @@
 
   .currNode {
     font-weight: bold;
+  }
+
+  .GA-progress-track {
+    height: 3px;
+    background-color: var(--background-modifier-border);
+    margin: 4px 0;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .GA-progress-bar {
+    height: 100%;
+    background-color: var(--interactive-accent);
+    transition: width 0.1s linear;
   }
 </style>

@@ -41,6 +41,30 @@ export default class MyGraph extends Graph {
     this.settings = settings
   }
 
+  // Build a fresh MyGraph from this one, keeping all nodes and a random
+  // `fraction` of edges (sampled without replacement). Edge attributes are
+  // preserved. Used by src/Bootstrap.ts for edge-subsampling resampling.
+  subsample(fraction: number, rng: () => number): MyGraph {
+    const fresh = new MyGraph(this.app, this.settings)
+    this.forEachNode((node, attrs) => {
+      fresh.addNode(node, { ...attrs })
+    })
+    const edges = this.edges()
+    const keep = Math.max(0, Math.floor(edges.length * fraction))
+    // Partial Fisher-Yates: shuffle the first `keep` positions then add those edges.
+    for (let i = 0; i < keep; i++) {
+      const j = i + Math.floor(rng() * (edges.length - i))
+      ;[edges[i], edges[j]] = [edges[j], edges[i]]
+      const e = edges[i]
+      const [source, target] = this.extremities(e)
+      const attrs = this.getEdgeAttributes(e)
+      if (!fresh.hasEdge(source, target)) {
+        fresh.addEdge(source, target, { ...attrs })
+      }
+    }
+    return fresh
+  }
+
   async initGraph(): Promise<MyGraph> {
     const { resolvedLinks, unresolvedLinks } = this.app.metadataCache
     const { exclusionRegex, exclusionTags, allFileExtensions, addUnresolved } =

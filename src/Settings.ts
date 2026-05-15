@@ -171,6 +171,79 @@ export class SampleSettingTab extends PluginSettingTab {
         }
       })
 
+    containerEl.createEl('h3', { text: 'Uncertainty (Bootstrap)' })
+
+    new Setting(containerEl)
+      .setName('Enable uncertainty by default')
+      .setDesc(
+        'When on, every supported analysis runs with bootstrap CIs from the start. You can still toggle per-view.'
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(settings.bootstrapEnabledDefault)
+          .onChange(async (value) => {
+            settings.bootstrapEnabledDefault = value
+            await plugin.saveSettings()
+          })
+      )
+
+    new Setting(containerEl)
+      .setName('Bootstrap iterations (B)')
+      .setDesc(
+        'Number of edge-subsampled resamples per analysis. 200 is a good default; 1000 narrows the CIs further but takes 5x longer.'
+      )
+      .addText((tc) => {
+        tc.setValue(String(settings.bootstrapIterations))
+        tc.inputEl.onblur = async () => {
+          const parsed = parseInt(tc.getValue(), 10)
+          if (!isNaN(parsed) && parsed >= 10 && parsed <= 2000) {
+            settings.bootstrapIterations = parsed
+            await plugin.saveSettings()
+          } else {
+            new Notice('Bootstrap iterations must be between 10 and 2000.')
+            tc.setValue(String(settings.bootstrapIterations))
+          }
+        }
+      })
+
+    new Setting(containerEl)
+      .setName('Subsample fraction')
+      .setDesc(
+        'Fraction of edges kept in each resample (between 0.5 and 0.95). 0.8 is the standard non-parametric jackknife-bootstrap default.'
+      )
+      .addText((tc) => {
+        tc.setValue(String(settings.bootstrapFraction))
+        tc.inputEl.onblur = async () => {
+          const parsed = parseFloat(tc.getValue())
+          if (!isNaN(parsed) && parsed >= 0.5 && parsed <= 0.95) {
+            settings.bootstrapFraction = parsed
+            await plugin.saveSettings()
+          } else {
+            new Notice('Subsample fraction must be between 0.5 and 0.95.')
+            tc.setValue(String(settings.bootstrapFraction))
+          }
+        }
+      })
+
+    new Setting(containerEl)
+      .setName('Random seed')
+      .setDesc(
+        'Seed for the resampling PRNG. Same seed and config = identical CIs across runs.'
+      )
+      .addText((tc) => {
+        tc.setValue(String(settings.bootstrapSeed))
+        tc.inputEl.onblur = async () => {
+          const parsed = parseInt(tc.getValue(), 10)
+          if (!isNaN(parsed)) {
+            settings.bootstrapSeed = parsed
+            await plugin.saveSettings()
+          } else {
+            new Notice('Seed must be an integer.')
+            tc.setValue(String(settings.bootstrapSeed))
+          }
+        }
+      })
+
     containerEl.createEl('h3', { text: 'Debugging Options' })
 
     new Setting(containerEl)

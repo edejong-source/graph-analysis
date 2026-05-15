@@ -19,6 +19,10 @@ export const DEFAULT_SETTINGS: GraphAnalysisSettings = {
     'Co-Citations',
     'Label Propagation',
   ],
+  bootstrapEnabledDefault: false,
+  bootstrapIterations: 200,
+  bootstrapFraction: 0.8,
+  bootstrapSeed: 42,
 }
 
 export const DECIMALS = 4
@@ -40,6 +44,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: 'See which of your notes are referenced together most often.',
     global: false,
     nlp: false,
+    supportsBootstrap: false,
   },
   {
     anl: 'Centrality',
@@ -47,6 +52,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: 'An authority has lots of links coming in\nA hub has lots of links going out.',
     global: true,
     nlp: false,
+    supportsBootstrap: true,
   },
   {
     anl: 'Link Prediction',
@@ -54,6 +60,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: 'Based on the structure of your graph, this alg predicts which notes _should_ be linked to the current note.',
     global: false,
     nlp: false,
+    supportsBootstrap: true,
   },
   // {
   //   anl: 'Link Prediction',
@@ -69,6 +76,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: "Based on the structure of your graph, this alg predicts which notes are most similar to the current note.\n\nIt shows the ratio of the numbers of neighbours two notes have in common, to the total number of neighbours they each have.\n\n'🔗' means that this note is linked to the group name.",
     global: false,
     nlp: false,
+    supportsBootstrap: true,
   },
   {
     anl: 'Similarity',
@@ -76,6 +84,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: '<No description given yet>',
     global: false,
     nlp: false,
+    supportsBootstrap: true,
   },
 
   {
@@ -84,6 +93,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: "Start by giving each node a unique label (its own name). Then, look at each node's neighbours, and change it's label to the most common among it's neighbours. Repeat this process `iterations` number of times. Show the nodes grouped by the last label they had.\n\n'🔗' means that this note is linked to the group name.",
     global: true,
     nlp: false,
+    supportsBootstrap: true,
   },
   {
     anl: 'Community Detection',
@@ -91,6 +101,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: "Show the Louvain community that the current note is in.\n\n'🔗' means that this note is linked to the group name.",
     global: false,
     nlp: false,
+    supportsBootstrap: true,
   },
   {
     anl: 'Community Detection',
@@ -98,6 +109,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: 'Gives the likelihood that a nodes _neighbours_ are connected to each other.',
     global: true,
     nlp: false,
+    supportsBootstrap: true,
   },
   {
     anl: 'NLP',
@@ -105,6 +117,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: 'Split a note into its words, count how many times each word appears, and use that to compare similarity between notes.',
     global: false,
     nlp: true,
+    supportsBootstrap: false,
   },
   // {
   //   anl: 'NLP',
@@ -119,6 +132,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: 'Returns the "Otsuka-Chiai" similarity between the current note and every other note.',
     global: false,
     nlp: true,
+    supportsBootstrap: false,
   },
   {
     anl: 'NLP',
@@ -126,6 +140,7 @@ export const ANALYSIS_TYPES: SubtypeInfo[] = [
     desc: 'Gives the sentiment of every note. Positive → higher sentiment.',
     global: true,
     nlp: true,
+    supportsBootstrap: false,
   },
 ]
 
