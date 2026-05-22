@@ -4,6 +4,7 @@
   import type { SubtypeInfo } from 'src/Interfaces'
   import type GraphAnalysisPlugin from 'src/main'
   import FaCreativeCommonsZero from 'svelte-icons/fa/FaCreativeCommonsZero.svelte'
+  import FaDownload from 'svelte-icons/fa/FaDownload.svelte'
   import FaFire from 'svelte-icons/fa/FaFire.svelte'
   import FaRegSnowflake from 'svelte-icons/fa/FaRegSnowflake.svelte'
   import IoIosTrendingDown from 'svelte-icons/io/IoIosTrendingDown.svelte'
@@ -29,6 +30,8 @@
   export let promiseSortedResults: Promise<any[]>
   export let page: number
   export let bootstrapEnabled: boolean = undefined
+  export let nullEnabled: boolean = undefined
+  export let exportCSV: (() => void) | undefined = undefined
 </script>
 
 <span class="GA-Subtype-Options">
@@ -160,6 +163,38 @@
       <span class="icon-text">{bootstrapEnabled ? '±' : '~'}</span>
     </span>
   {/if}
+  {#if nullEnabled !== undefined && bootstrapEnabled && currSubtypeInfo.supportsBootstrap}
+    <span
+      class="GA-Option-span GA-null-toggle"
+      class:active={nullEnabled}
+      aria-label={nullEnabled
+        ? 'Null overlay ON — degree-preserving random graph CI'
+        : 'Null overlay OFF — click to compare against configuration-model null'}
+      on:click={() => {
+        nullEnabled = !nullEnabled
+        if (!frozen) {
+          blockSwitch = true
+          newBatch = []
+          visibleData = []
+          promiseSortedResults = null
+          page = 0
+        }
+      }}
+    >
+      <span class="icon-text">H₀</span>
+    </span>
+  {/if}
+  {#if exportCSV !== undefined}
+    <span
+      class="GA-Option-span"
+      aria-label="Export current view as CSV"
+      on:click={exportCSV}
+    >
+      <span class="icon">
+        <FaDownload />
+      </span>
+    </span>
+  {/if}
   <span
     class="GA-Option-span"
     aria-label="Refresh Index"
@@ -200,6 +235,21 @@
     border-radius: 3px;
   }
   .GA-bootstrap-toggle.active .icon-text {
+    color: var(--text-on-accent);
+    background-color: var(--interactive-accent);
+  }
+  .GA-null-toggle .icon-text {
+    display: inline-block;
+    width: 22px;
+    height: 20px;
+    text-align: center;
+    line-height: 20px;
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--text-muted);
+    border-radius: 3px;
+  }
+  .GA-null-toggle.active .icon-text {
     color: var(--text-on-accent);
     background-color: var(--interactive-accent);
   }

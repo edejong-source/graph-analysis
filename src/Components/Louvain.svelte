@@ -8,7 +8,10 @@
   import { bootstrapCommunityCoMembership } from 'src/Bootstrap'
   import {
     classExt,
+    csvEscape,
+    downloadCSV,
     dropPath,
+    fmtNum,
     getImgBufferPromise,
     isImg,
     openMenu,
@@ -125,6 +128,25 @@
 
   $: visibleData = [...visibleData, ...newBatch]
 
+  async function exportCSV() {
+    if (!promiseSortedResults) return
+    const data = await promiseSortedResults
+    const header = bootstrapEnabled
+      ? ['note', 'co_membership_prob', 'linked_to_focal']
+      : ['note', 'linked_to_focal']
+    const lines = [header.join(',')]
+    for (const r of data) {
+      const fields = bootstrapEnabled
+        ? [r.to, fmtNum(r.prob ?? 0, 3), r.linked ? '1' : '0']
+        : [r.to, r.linked ? '1' : '0']
+      lines.push(fields.map(csvEscape).join(','))
+    }
+    const stamp = new Date().toISOString().split('T')[0]
+    const focal = (currNode ?? 'unknown').replace(/[\\\/]/g, '_').replace(/\.md$/, '')
+    const tag = bootstrapEnabled ? 'bootstrap-Louvain' : 'Louvain'
+    downloadCSV(lines.join('\n'), `graph-analysis-${tag}-${focal}-${stamp}.csv`)
+  }
+
   onMount(() => {
     currFile = app.workspace.getActiveFile()
   })
@@ -143,6 +165,7 @@
   bind:promiseSortedResults
   bind:page
   bind:bootstrapEnabled
+  {exportCSV}
 />
 
 {#if bootstrapEnabled && progress < 1}

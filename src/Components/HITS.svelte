@@ -16,10 +16,13 @@
     Subtype,
   } from 'src/Interfaces'
   import type GraphAnalysisPlugin from 'src/main'
-  import { bootstrapHITS } from 'src/Bootstrap'
+  import { bootstrapHITS, bootstrapHITSNull } from 'src/Bootstrap'
   import {
     classExt,
+    csvEscape,
+    downloadCSV,
     dropPath,
+    fmtNum,
     getImgBufferPromise,
     isImg,
     openMenu,
@@ -46,6 +49,7 @@
   let ascOrder = false
   let { noInfinity, noZero } = settings
   let bootstrapEnabled = settings.bootstrapEnabledDefault
+  let nullEnabled = settings.bootstrapNullEnabledDefault
   let progress = 1
   let currFile = app.workspace.getActiveFile()
 
@@ -61,6 +65,12 @@
     hub_ci_lo?: number
     hub_ci_hi?: number
     hub_stability?: number
+    auth_null_ci_lo?: number
+    auth_null_ci_hi?: number
+    hub_null_ci_lo?: number
+    hub_null_ci_hi?: number
+    auth_sig?: boolean
+    hub_sig?: boolean
   }
 
   $: currNode = currFile?.path
@@ -101,16 +111,27 @@
     ? null
     : (bootstrapEnabled
         ? (progress = 0,
-          bootstrapHITS(
-            plugin.g,
-            {
+          (async () => {
+            const opts = {
               iterations: plugin.settings.bootstrapIterations,
               fraction: plugin.settings.bootstrapFraction,
               seed: plugin.settings.bootstrapSeed,
               yieldEvery: 10,
-            },
-            (d, t) => (progress = d / t),
-          ).then((agg: BootstrapHITSResult) => {
+            }
+            const agg: BootstrapHITSResult = await bootstrapHITS(
+              plugin.g,
+              opts,
+              (d, t) => (progress = d / t),
+            )
+            let nullAgg: BootstrapHITSResult | null = null
+            if (nullEnabled) {
+              progress = 0
+              nullAgg = await bootstrapHITSNull(
+                plugin.g,
+                opts,
+                (d, t) => (progress = d / t),
+              )
+            }
             const componentResults: ComponentResults[] = []
             plugin.g.forEachNode((to) => {
               const authAgg = agg.authorities[to]
@@ -123,6 +144,18 @@
                   plugin.settings.showImgThumbnails && isImg(to)
                     ? getImgBufferPromise(app, to)
                     : null
+                const authNull = nullAgg?.authorities[to]
+                const hubNull = nullAgg?.hubs[to]
+                const auth_sig =
+                  authNull !== undefined &&
+                  Number.isFinite(authAgg?.ci_lo) &&
+                  Number.isFinite(authNull.ci_hi) &&
+                  authAgg.ci_lo > authNull.ci_hi
+                const hub_sig =
+                  hubNull !== undefined &&
+                  Number.isFinite(hubAgg?.ci_lo) &&
+                  Number.isFinite(hubNull.ci_hi) &&
+                  hubAgg.ci_lo > hubNull.ci_hi
                 componentResults.push({
                   authority,
                   hub,
@@ -135,11 +168,17 @@
                   hub_ci_lo: hubAgg?.ci_lo,
                   hub_ci_hi: hubAgg?.ci_hi,
                   hub_stability: hubAgg?.stability,
+                  auth_null_ci_lo: authNull?.ci_lo,
+                  auth_null_ci_hi: authNull?.ci_hi,
+                  hub_null_ci_lo: hubNull?.ci_lo,
+                  hub_null_ci_hi: hubNull?.ci_hi,
+                  auth_sig,
+                  hub_sig,
                 })
               }
             })
             return sortAndFinalize(componentResults)
-          }))
+          })())
         : plugin.g.algs['HITS']('').then((results: HITSResult) => {
             const componentResults: ComponentResults[] = []
             plugin.g.forEachNode((to) => {
@@ -166,6 +205,38 @@
 
   $: visibleData = [...visibleData, ...newBatch]
 
+  async function exportCSV() {
+    if (!promiseSortedResults) return
+    const data = await promiseSortedResults
+    const useCI = bootstrapEnabled
+    const useNull = useCI && nullEnabled
+    const header = useCI
+      ? [
+          'note',
+          'authority_median', 'auth_ci_lo', 'auth_ci_hi', 'auth_stability',
+          ...(useNull ? ['auth_null_ci_lo', 'auth_null_ci_hi', 'auth_sig'] : []),
+          'hub_median', 'hub_ci_lo', 'hub_ci_hi', 'hub_stability',
+          ...(useNull ? ['hub_null_ci_lo', 'hub_null_ci_hi', 'hub_sig'] : []),
+        ]
+      : ['note', 'authority', 'hub']
+    const lines = [header.join(',')]
+    for (const r of data) {
+      const fields = useCI
+        ? [
+            r.to,
+            fmtNum(r.authority), fmtNum(r.auth_ci_lo, 3), fmtNum(r.auth_ci_hi, 3), fmtNum(r.auth_stability, 3),
+            ...(useNull ? [fmtNum(r.auth_null_ci_lo, 3), fmtNum(r.auth_null_ci_hi, 3), r.auth_sig ? '1' : '0'] : []),
+            fmtNum(r.hub), fmtNum(r.hub_ci_lo, 3), fmtNum(r.hub_ci_hi, 3), fmtNum(r.hub_stability, 3),
+            ...(useNull ? [fmtNum(r.hub_null_ci_lo, 3), fmtNum(r.hub_null_ci_hi, 3), r.hub_sig ? '1' : '0'] : []),
+          ]
+        : [r.to, fmtNum(r.authority), fmtNum(r.hub)]
+      lines.push(fields.map(csvEscape).join(','))
+    }
+    const stamp = new Date().toISOString().split('T')[0]
+    const tag = useCI ? 'bootstrap-HITS' : 'HITS'
+    downloadCSV(lines.join('\n'), `graph-analysis-${tag}-${stamp}.csv`)
+  }
+
   onMount(() => {
     currFile = app.workspace.getActiveFile()
   })
@@ -186,6 +257,8 @@
   bind:promiseSortedResults
   bind:page
   bind:bootstrapEnabled
+  bind:nullEnabled
+  {exportCSV}
 />
 
 {#if bootstrapEnabled && progress < 1}
@@ -201,11 +274,17 @@
       <th scope="col">Authority</th>
       {#if bootstrapEnabled}
         <th scope="col" aria-label="95% bootstrap CI for authority">CI (A)</th>
+        {#if nullEnabled}
+          <th scope="col" aria-label="Configuration-model null 95% CI for authority">Null CI (A)</th>
+        {/if}
         <th scope="col" aria-label="Top-10 frequency for authority">Top-10 (A)</th>
       {/if}
       <th scope="col">Hub</th>
       {#if bootstrapEnabled}
         <th scope="col" aria-label="95% bootstrap CI for hub">CI (H)</th>
+        {#if nullEnabled}
+          <th scope="col" aria-label="Configuration-model null 95% CI for hub">Null CI (H)</th>
+        {/if}
         <th scope="col" aria-label="Top-10 frequency for hub">Top-10 (H)</th>
       {/if}
     </tr>
@@ -219,6 +298,7 @@
             <tr
               class="
               {classExt(node.to)}"
+              class:GA-sig={node.auth_sig || node.hub_sig}
             >
               <td
                 on:click={async (e) => await openOrSwitch(app, node.to, e)}
@@ -244,6 +324,16 @@
                   [{Number.isFinite(node.auth_ci_lo) ? node.auth_ci_lo.toFixed(3) : '—'},
                   {Number.isFinite(node.auth_ci_hi) ? node.auth_ci_hi.toFixed(3) : '—'}]
                 </td>
+                {#if nullEnabled}
+                  <td class={MEASURE}>
+                    {#if node.auth_null_ci_lo !== undefined && node.auth_null_ci_hi !== undefined}
+                      [{Number.isFinite(node.auth_null_ci_lo) ? node.auth_null_ci_lo.toFixed(3) : '—'},
+                      {Number.isFinite(node.auth_null_ci_hi) ? node.auth_null_ci_hi.toFixed(3) : '—'}]
+                    {:else}
+                      —
+                    {/if}
+                  </td>
+                {/if}
                 <td class={MEASURE}>{((node.auth_stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}
               <td class={MEASURE}>{node.hub}</td>
@@ -252,6 +342,16 @@
                   [{Number.isFinite(node.hub_ci_lo) ? node.hub_ci_lo.toFixed(3) : '—'},
                   {Number.isFinite(node.hub_ci_hi) ? node.hub_ci_hi.toFixed(3) : '—'}]
                 </td>
+                {#if nullEnabled}
+                  <td class={MEASURE}>
+                    {#if node.hub_null_ci_lo !== undefined && node.hub_null_ci_hi !== undefined}
+                      [{Number.isFinite(node.hub_null_ci_lo) ? node.hub_null_ci_lo.toFixed(3) : '—'},
+                      {Number.isFinite(node.hub_null_ci_hi) ? node.hub_null_ci_hi.toFixed(3) : '—'}]
+                    {:else}
+                      —
+                    {/if}
+                  </td>
+                {/if}
                 <td class={MEASURE}>{((node.hub_stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}
             </tr>

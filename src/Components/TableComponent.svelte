@@ -15,10 +15,14 @@
     Subtype,
   } from 'src/Interfaces'
   import type GraphAnalysisPlugin from 'src/main'
-  import { bootstrapScalar } from 'src/Bootstrap'
+  import { bootstrapScalar, bootstrapScalarNull } from 'src/Bootstrap'
+  import type { BootstrapScalarMap } from 'src/Interfaces'
   import {
     classExt,
+    csvEscape,
+    downloadCSV,
     dropPath,
+    fmtNum,
     getImgBufferPromise,
     isImg,
     openMenu,
@@ -43,6 +47,7 @@
   let ascOrder = false
   let { noInfinity, noZero } = settings
   let bootstrapEnabled = settings.bootstrapEnabledDefault
+  let nullEnabled = settings.bootstrapNullEnabledDefault
   let progress = 1
   let currFile = app.workspace.getActiveFile()
 
@@ -57,6 +62,9 @@
     ci_hi?: number
     stability?: number
     n?: number
+    null_ci_lo?: number
+    null_ci_hi?: number
+    sig?: boolean
   }
 
   $: currNode = currFile?.path
@@ -118,7 +126,8 @@
   }
 
   function buildRowsFromBootstrap(
-    agg: { [to: string]: { median: number; ci_lo: number; ci_hi: number; stability: number; n: number } },
+    agg: BootstrapScalarMap,
+    nullAgg: BootstrapScalarMap | null,
   ): ComponentResults[] {
     const greater = ascOrder ? 1 : -1
     const lesser = ascOrder ? -1 : 1
@@ -132,6 +141,12 @@
           plugin.settings.showImgThumbnails && isImg(to)
             ? getImgBufferPromise(app, to)
             : null
+        const nullRec = nullAgg?.[to]
+        const sig =
+          nullRec !== undefined &&
+          Number.isFinite(ci_lo) &&
+          Number.isFinite(nullRec.ci_hi) &&
+          ci_lo > nullRec.ci_hi
         componentResults.push({
           measure: median,
           linked,
@@ -143,6 +158,9 @@
           ci_hi,
           stability,
           n,
+          null_ci_lo: nullRec?.ci_lo,
+          null_ci_hi: nullRec?.ci_hi,
+          sig,
         })
       }
     })
@@ -157,18 +175,31 @@
       ? null
       : (bootstrapEnabled && currSubtypeInfo?.supportsBootstrap
           ? (progress = 0,
-            bootstrapScalar(
-              plugin.g,
-              currSubtype,
-              currNode,
-              {
+            (async () => {
+              const opts = {
                 iterations: plugin.settings.bootstrapIterations,
                 fraction: plugin.settings.bootstrapFraction,
                 seed: plugin.settings.bootstrapSeed,
                 yieldEvery: 20,
-              },
-              (d, t) => (progress = d / t),
-            ).then(buildRowsFromBootstrap))
+              }
+              const obs = await bootstrapScalar(
+                plugin.g,
+                currSubtype,
+                currNode,
+                opts,
+                (d, t) => (progress = d / t),
+              )
+              if (!nullEnabled) return buildRowsFromBootstrap(obs, null)
+              progress = 0
+              const nul = await bootstrapScalarNull(
+                plugin.g,
+                currSubtype,
+                currNode,
+                opts,
+                (d, t) => (progress = d / t),
+              )
+              return buildRowsFromBootstrap(obs, nul)
+            })())
           : plugin.g.algs[currSubtype](currNode).then((r) =>
               buildRowsFromPointEstimate(r as ResultMap),
             )
@@ -181,6 +212,25 @@
         })
 
   $: visibleData = [...visibleData, ...newBatch]
+
+  async function exportCSV() {
+    if (!promiseSortedResults) return
+    const data = await promiseSortedResults
+    const useCI = bootstrapEnabled && currSubtypeInfo?.supportsBootstrap
+    const header = useCI
+      ? ['note', 'median', 'ci_lo', 'ci_hi', 'stability', 'n']
+      : ['note', 'measure', 'extra']
+    const lines = [header.join(',')]
+    for (const r of data) {
+      const fields = useCI
+        ? [r.to, fmtNum(r.measure), fmtNum(r.ci_lo), fmtNum(r.ci_hi), fmtNum(r.stability, 3), String(r.n ?? '')]
+        : [r.to, fmtNum(r.measure), (r.extra ?? []).join(';')]
+      lines.push(fields.map(csvEscape).join(','))
+    }
+    const stamp = new Date().toISOString().split('T')[0]
+    const tag = useCI ? `bootstrap-${currSubtype}` : String(currSubtype)
+    downloadCSV(lines.join('\n'), `graph-analysis-${tag}-${stamp}.csv`)
+  }
 
   onMount(() => {
     currFile = app.workspace.getActiveFile()
@@ -202,6 +252,8 @@
   bind:promiseSortedResults
   bind:page
   bind:bootstrapEnabled
+  bind:nullEnabled
+  {exportCSV}
 />
 
 {#if bootstrapEnabled && currSubtypeInfo?.supportsBootstrap && progress < 1}
@@ -217,6 +269,9 @@
       <th scope="col">{bootstrapEnabled && currSubtypeInfo?.supportsBootstrap ? 'Median' : 'Value'}</th>
       {#if bootstrapEnabled && currSubtypeInfo?.supportsBootstrap}
         <th scope="col" aria-label="95% bootstrap confidence interval">95% CI</th>
+        {#if nullEnabled}
+          <th scope="col" aria-label="Configuration-model null 95% CI (degree-preserving random graph)">Null 95% CI</th>
+        {/if}
         <th scope="col" aria-label="Fraction of resamples where this note ranked in the top 10">Top-10</th>
       {/if}
     </tr>
@@ -228,8 +283,9 @@
           {#if (currSubtypeInfo.global || node.to !== currNode) && node !== undefined}
             <!-- svelte-ignore a11y-unknown-aria-attribute -->
             <tr
-              class="{node.linked ? LINKED : NOT_LINKED} 
+              class="{node.linked ? LINKED : NOT_LINKED}
             {classExt(node.to)}"
+              class:GA-sig={node.sig}
             >
               <td
                 aria-label={node.extra.map(presentPath).join('\n')}
@@ -261,6 +317,16 @@
                   [{Number.isFinite(node.ci_lo) ? node.ci_lo.toFixed(3) : '∞'},
                   {Number.isFinite(node.ci_hi) ? node.ci_hi.toFixed(3) : '∞'}]
                 </td>
+                {#if nullEnabled}
+                  <td class={MEASURE}>
+                    {#if node.null_ci_lo !== undefined && node.null_ci_hi !== undefined}
+                      [{Number.isFinite(node.null_ci_lo) ? node.null_ci_lo.toFixed(3) : '∞'},
+                      {Number.isFinite(node.null_ci_hi) ? node.null_ci_hi.toFixed(3) : '∞'}]
+                    {:else}
+                      —
+                    {/if}
+                  </td>
+                {/if}
                 <td class={MEASURE}>{((node.stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}
             </tr>
@@ -319,5 +385,9 @@
     height: 100%;
     background-color: var(--interactive-accent);
     transition: width 0.1s linear;
+  }
+
+  :global(.GA-sig) {
+    font-weight: 600;
   }
 </style>

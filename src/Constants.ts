@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS: GraphAnalysisSettings = {
     'Label Propagation',
   ],
   bootstrapEnabledDefault: false,
+  bootstrapNullEnabledDefault: false,
   bootstrapIterations: 200,
   bootstrapFraction: 0.8,
   bootstrapSeed: 42,

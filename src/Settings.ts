@@ -188,6 +188,20 @@ export class SampleSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
+      .setName('Enable null overlay by default')
+      .setDesc(
+        'When on, supported analyses also run on a degree-preserving random graph (configuration model) so you can see whether the observed CI clears chance. Doubles runtime.'
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(settings.bootstrapNullEnabledDefault)
+          .onChange(async (value) => {
+            settings.bootstrapNullEnabledDefault = value
+            await plugin.saveSettings()
+          })
+      )
+
+    new Setting(containerEl)
       .setName('Bootstrap iterations (B)')
       .setDesc(
         'Number of edge-subsampled resamples per analysis. 200 is a good default; 1000 narrows the CIs further but takes 5x longer.'

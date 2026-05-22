@@ -131,6 +131,8 @@ export interface GraphAnalysisSettings {
   algsToShow: Subtype[]
   // Edge-subsampling bootstrap defaults (per-view toggle in SubtypeOptions).
   bootstrapEnabledDefault: boolean
+  // Configuration-model null overlay default (only relevant when bootstrap is on).
+  bootstrapNullEnabledDefault: boolean
   bootstrapIterations: number
   bootstrapFraction: number
   bootstrapSeed: number

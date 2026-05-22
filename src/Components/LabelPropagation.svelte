@@ -14,6 +14,9 @@
     classExt,
     classLinked,
     classResolved,
+    csvEscape,
+    downloadCSV,
+    fmtNum,
     getImgBufferPromise,
     isImg,
     openMenu,
@@ -130,6 +133,28 @@
 
   $: visibleData = [...visibleData, ...newBatch]
 
+  async function exportCSV() {
+    const stamp = new Date().toISOString().split('T')[0]
+    if (bootstrapEnabled && coMembershipRows.length) {
+      const focal = (currNode ?? 'unknown').replace(/[\\\/]/g, '_').replace(/\.md$/, '')
+      const lines = ['note,co_membership_prob']
+      for (const r of coMembershipRows) {
+        lines.push([csvEscape(r.to), fmtNum(r.prob, 3)].join(','))
+      }
+      downloadCSV(lines.join('\n'), `graph-analysis-bootstrap-LabelPropagation-${focal}-${stamp}.csv`)
+      return
+    }
+    if (!promiseSortedResults) return
+    const data = await promiseSortedResults
+    const lines = ['community_label,community_size,member']
+    for (const comm of data) {
+      for (const m of comm.comm) {
+        lines.push([csvEscape(comm.label), String(comm.comm.length), csvEscape(m)].join(','))
+      }
+    }
+    downloadCSV(lines.join('\n'), `graph-analysis-LabelPropagation-${stamp}.csv`)
+  }
+
   onMount(() => {
     currFile = app.workspace.getActiveFile()
   })
@@ -150,6 +175,7 @@
         {plugin}
         {view}
         {app}
+        {exportCSV}
       />
 
       <label for="iterations">Iterations: </label>

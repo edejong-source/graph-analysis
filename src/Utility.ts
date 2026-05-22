@@ -318,6 +318,29 @@ export function getMaxKey(obj: Record<string, number>) {
 export const isImg = (path: string) =>
   IMG_EXTENSIONS.includes(path.split('.').last())
 
+export function csvEscape(s: string): string {
+  if (s == null) return ''
+  const str = String(s)
+  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str
+}
+
+export function downloadCSV(text: string, filename: string): void {
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 100)
+}
+
+export function fmtNum(n: number, dec = 4): string {
+  if (n == null || !Number.isFinite(n)) return ''
+  return n.toFixed(dec)
+}
+
 export async function openOrSwitch(
   app: App,
   dest: string,
