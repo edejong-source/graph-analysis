@@ -4,7 +4,6 @@ import type {
   BootstrapHITSResult,
   BootstrapOptions,
   BootstrapScalarMap,
-  CoCitationMap,
   Communities,
   HITSResult,
   ResultMap,
@@ -45,11 +44,16 @@ async function yieldToMainThread(): Promise<void> {
 
 function aggregateScalar(
   samples: number[],
+  rankSamples: number[],
   topTenHits: number,
   n: number,
 ): BootstrapAggregate {
   if (samples.length === 0) {
-    return { median: NaN, mean: NaN, ci_lo: NaN, ci_hi: NaN, stability: 0, n: 0 }
+    return {
+      median: NaN, mean: NaN, ci_lo: NaN, ci_hi: NaN,
+      stability: 0, n: 0,
+      rank_median: NaN, rank_ci_lo: NaN, rank_ci_hi: NaN,
+    }
   }
   const sorted = samples.slice().sort((a, b) => a - b)
   const len = sorted.length
@@ -58,6 +62,13 @@ function aggregateScalar(
     return sorted[idx]
   }
   const sum = sorted.reduce((acc, v) => acc + v, 0)
+
+  const sortedR = rankSamples.slice().sort((a, b) => a - b)
+  const lenR = sortedR.length
+  const pctR = (p: number) => {
+    const idx = Math.min(lenR - 1, Math.max(0, Math.floor(p * (lenR - 1))))
+    return sortedR[idx]
+  }
   return {
     median: pct(0.5),
     mean: sum / len,
@@ -65,6 +76,9 @@ function aggregateScalar(
     ci_hi: pct(0.975),
     stability: n > 0 ? topTenHits / n : 0,
     n,
+    rank_median: lenR > 0 ? pctR(0.5) : NaN,
+    rank_ci_lo: lenR > 0 ? pctR(0.025) : NaN,
+    rank_ci_hi: lenR > 0 ? pctR(0.975) : NaN,
   }
 }
 
@@ -91,20 +105,22 @@ export async function bootstrapScalar(
   const rng = mulberry32(seed)
 
   const perNodeSamples: { [node: string]: number[] } = {}
+  const perNodeRankSamples: { [node: string]: number[] } = {}
   const perNodeTopTenCount: { [node: string]: number } = {}
   const perNodeN: { [node: string]: number } = {}
 
   for (let b = 0; b < iterations; b++) {
     const sample = graph.subsample(fraction, rng)
     const raw = (await sample.algs[subtype](focalNode)) as ResultMap
-    const top10: string[] = topKByMeasure(raw, 10)
-    for (const top of top10) {
+    const ranked = rankPairsFromResultMap(raw)
+    for (let r = 0; r < Math.min(10, ranked.length); r++) {
+      const [top] = ranked[r]
       perNodeTopTenCount[top] = (perNodeTopTenCount[top] ?? 0) + 1
     }
-    for (const to in raw) {
-      const m = raw[to].measure
-      if (m === Infinity || !Number.isFinite(m)) continue
+    for (let r = 0; r < ranked.length; r++) {
+      const [to, m] = ranked[r]
       ;(perNodeSamples[to] ??= []).push(m)
+      ;(perNodeRankSamples[to] ??= []).push(r + 1)
       perNodeN[to] = (perNodeN[to] ?? 0) + 1
     }
     if ((b + 1) % yieldEvery === 0) {
@@ -118,6 +134,7 @@ export async function bootstrapScalar(
   for (const node in perNodeSamples) {
     out[node] = aggregateScalar(
       perNodeSamples[node],
+      perNodeRankSamples[node] ?? [],
       perNodeTopTenCount[node] ?? 0,
       perNodeN[node] ?? 0,
     )
@@ -143,6 +160,8 @@ export async function bootstrapHITS(
 
   const authSamples: { [node: string]: number[] } = {}
   const hubSamples: { [node: string]: number[] } = {}
+  const authRanks: { [node: string]: number[] } = {}
+  const hubRanks: { [node: string]: number[] } = {}
   const authTopTen: { [node: string]: number } = {}
   const hubTopTen: { [node: string]: number } = {}
   const authN: { [node: string]: number } = {}
@@ -151,23 +170,27 @@ export async function bootstrapHITS(
   for (let b = 0; b < iterations; b++) {
     const sample = graph.subsample(fraction, rng)
     const res = (await sample.algs.HITS('')) as HITSResult
-    const top10Auth = topKByDict(res.authorities, 10)
-    const top10Hub = topKByDict(res.hubs, 10)
-    for (const t of top10Auth) authTopTen[t] = (authTopTen[t] ?? 0) + 1
-    for (const t of top10Hub) hubTopTen[t] = (hubTopTen[t] ?? 0) + 1
-    for (const node in res.authorities) {
-      const a = res.authorities[node]
-      if (Number.isFinite(a)) {
-        ;(authSamples[node] ??= []).push(a)
-        authN[node] = (authN[node] ?? 0) + 1
-      }
+    const authRanked = rankPairsFromDict(res.authorities)
+    const hubRanked = rankPairsFromDict(res.hubs)
+    for (let r = 0; r < Math.min(10, authRanked.length); r++) {
+      const [t] = authRanked[r]
+      authTopTen[t] = (authTopTen[t] ?? 0) + 1
     }
-    for (const node in res.hubs) {
-      const h = res.hubs[node]
-      if (Number.isFinite(h)) {
-        ;(hubSamples[node] ??= []).push(h)
-        hubN[node] = (hubN[node] ?? 0) + 1
-      }
+    for (let r = 0; r < Math.min(10, hubRanked.length); r++) {
+      const [t] = hubRanked[r]
+      hubTopTen[t] = (hubTopTen[t] ?? 0) + 1
+    }
+    for (let r = 0; r < authRanked.length; r++) {
+      const [node, a] = authRanked[r]
+      ;(authSamples[node] ??= []).push(a)
+      ;(authRanks[node] ??= []).push(r + 1)
+      authN[node] = (authN[node] ?? 0) + 1
+    }
+    for (let r = 0; r < hubRanked.length; r++) {
+      const [node, h] = hubRanked[r]
+      ;(hubSamples[node] ??= []).push(h)
+      ;(hubRanks[node] ??= []).push(r + 1)
+      hubN[node] = (hubN[node] ?? 0) + 1
     }
     if ((b + 1) % yieldEvery === 0) {
       onProgress(b + 1, iterations)
@@ -181,6 +204,7 @@ export async function bootstrapHITS(
   for (const node in authSamples) {
     authorities[node] = aggregateScalar(
       authSamples[node],
+      authRanks[node] ?? [],
       authTopTen[node] ?? 0,
       authN[node] ?? 0,
     )
@@ -188,6 +212,7 @@ export async function bootstrapHITS(
   for (const node in hubSamples) {
     hubs[node] = aggregateScalar(
       hubSamples[node],
+      hubRanks[node] ?? [],
       hubTopTen[node] ?? 0,
       hubN[node] ?? 0,
     )
@@ -336,20 +361,22 @@ export async function bootstrapScalarNull(
   const rng = mulberry32(seed ^ 0x9e3779b9)
 
   const perNodeSamples: { [node: string]: number[] } = {}
+  const perNodeRankSamples: { [node: string]: number[] } = {}
   const perNodeTopTenCount: { [node: string]: number } = {}
   const perNodeN: { [node: string]: number } = {}
 
   for (let b = 0; b < iterations; b++) {
     const nullGraph = rewireDegreePreserving(graph, rng)
     const raw = (await nullGraph.algs[subtype](focalNode)) as ResultMap
-    const top10: string[] = topKByMeasure(raw, 10)
-    for (const top of top10) {
+    const ranked = rankPairsFromResultMap(raw)
+    for (let r = 0; r < Math.min(10, ranked.length); r++) {
+      const [top] = ranked[r]
       perNodeTopTenCount[top] = (perNodeTopTenCount[top] ?? 0) + 1
     }
-    for (const to in raw) {
-      const m = raw[to].measure
-      if (m === Infinity || !Number.isFinite(m)) continue
+    for (let r = 0; r < ranked.length; r++) {
+      const [to, m] = ranked[r]
       ;(perNodeSamples[to] ??= []).push(m)
+      ;(perNodeRankSamples[to] ??= []).push(r + 1)
       perNodeN[to] = (perNodeN[to] ?? 0) + 1
     }
     if ((b + 1) % yieldEvery === 0) {
@@ -363,6 +390,7 @@ export async function bootstrapScalarNull(
   for (const node in perNodeSamples) {
     out[node] = aggregateScalar(
       perNodeSamples[node],
+      perNodeRankSamples[node] ?? [],
       perNodeTopTenCount[node] ?? 0,
       perNodeN[node] ?? 0,
     )
@@ -391,6 +419,8 @@ export async function bootstrapHITSNull(
 
   const authSamples: { [node: string]: number[] } = {}
   const hubSamples: { [node: string]: number[] } = {}
+  const authRanks: { [node: string]: number[] } = {}
+  const hubRanks: { [node: string]: number[] } = {}
   const authTopTen: { [node: string]: number } = {}
   const hubTopTen: { [node: string]: number } = {}
   const authN: { [node: string]: number } = {}
@@ -399,23 +429,27 @@ export async function bootstrapHITSNull(
   for (let b = 0; b < iterations; b++) {
     const nullGraph = rewireDegreePreserving(graph, rng)
     const res = (await nullGraph.algs.HITS('')) as HITSResult
-    const top10Auth = topKByDict(res.authorities, 10)
-    const top10Hub = topKByDict(res.hubs, 10)
-    for (const t of top10Auth) authTopTen[t] = (authTopTen[t] ?? 0) + 1
-    for (const t of top10Hub) hubTopTen[t] = (hubTopTen[t] ?? 0) + 1
-    for (const node in res.authorities) {
-      const a = res.authorities[node]
-      if (Number.isFinite(a)) {
-        ;(authSamples[node] ??= []).push(a)
-        authN[node] = (authN[node] ?? 0) + 1
-      }
+    const authRanked = rankPairsFromDict(res.authorities)
+    const hubRanked = rankPairsFromDict(res.hubs)
+    for (let r = 0; r < Math.min(10, authRanked.length); r++) {
+      const [t] = authRanked[r]
+      authTopTen[t] = (authTopTen[t] ?? 0) + 1
     }
-    for (const node in res.hubs) {
-      const h = res.hubs[node]
-      if (Number.isFinite(h)) {
-        ;(hubSamples[node] ??= []).push(h)
-        hubN[node] = (hubN[node] ?? 0) + 1
-      }
+    for (let r = 0; r < Math.min(10, hubRanked.length); r++) {
+      const [t] = hubRanked[r]
+      hubTopTen[t] = (hubTopTen[t] ?? 0) + 1
+    }
+    for (let r = 0; r < authRanked.length; r++) {
+      const [node, a] = authRanked[r]
+      ;(authSamples[node] ??= []).push(a)
+      ;(authRanks[node] ??= []).push(r + 1)
+      authN[node] = (authN[node] ?? 0) + 1
+    }
+    for (let r = 0; r < hubRanked.length; r++) {
+      const [node, h] = hubRanked[r]
+      ;(hubSamples[node] ??= []).push(h)
+      ;(hubRanks[node] ??= []).push(r + 1)
+      hubN[node] = (hubN[node] ?? 0) + 1
     }
     if ((b + 1) % yieldEvery === 0) {
       onProgress(b + 1, iterations)
@@ -429,6 +463,7 @@ export async function bootstrapHITSNull(
   for (const node in authSamples) {
     authorities[node] = aggregateScalar(
       authSamples[node],
+      authRanks[node] ?? [],
       authTopTen[node] ?? 0,
       authN[node] ?? 0,
     )
@@ -436,6 +471,7 @@ export async function bootstrapHITSNull(
   for (const node in hubSamples) {
     hubs[node] = aggregateScalar(
       hubSamples[node],
+      hubRanks[node] ?? [],
       hubTopTen[node] ?? 0,
       hubN[node] ?? 0,
     )
@@ -452,22 +488,25 @@ function findLabelOf(comms: Communities, node: string): string | null {
   return null
 }
 
-function topKByMeasure(results: ResultMap | CoCitationMap, k: number): string[] {
+// Sort nodes within a single resample by measure descending. Index in the
+// returned array (0-based) corresponds to rank − 1, so pairs[0] is rank 1.
+// Non-finite measures are dropped — they don't get a rank in that resample.
+function rankPairsFromResultMap(results: ResultMap): [string, number][] {
   const pairs: [string, number][] = []
   for (const to in results) {
-    const m = (results as ResultMap)[to].measure
+    const m = results[to].measure
     if (Number.isFinite(m)) pairs.push([to, m])
   }
   pairs.sort((a, b) => b[1] - a[1])
-  return pairs.slice(0, k).map(([n]) => n)
+  return pairs
 }
 
-function topKByDict(d: { [node: string]: number }, k: number): string[] {
+function rankPairsFromDict(d: { [node: string]: number }): [string, number][] {
   const pairs: [string, number][] = []
   for (const node in d) {
     const v = d[node]
     if (Number.isFinite(v)) pairs.push([node, v])
   }
   pairs.sort((a, b) => b[1] - a[1])
-  return pairs.slice(0, k).map(([n]) => n)
+  return pairs
 }

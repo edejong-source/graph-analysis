@@ -71,6 +71,12 @@
     hub_null_ci_hi?: number
     auth_sig?: boolean
     hub_sig?: boolean
+    auth_rank_median?: number
+    auth_rank_ci_lo?: number
+    auth_rank_ci_hi?: number
+    hub_rank_median?: number
+    hub_rank_ci_lo?: number
+    hub_rank_ci_hi?: number
   }
 
   $: currNode = currFile?.path
@@ -174,6 +180,12 @@
                   hub_null_ci_hi: hubNull?.ci_hi,
                   auth_sig,
                   hub_sig,
+                  auth_rank_median: authAgg?.rank_median,
+                  auth_rank_ci_lo: authAgg?.rank_ci_lo,
+                  auth_rank_ci_hi: authAgg?.rank_ci_hi,
+                  hub_rank_median: hubAgg?.rank_median,
+                  hub_rank_ci_lo: hubAgg?.rank_ci_lo,
+                  hub_rank_ci_hi: hubAgg?.rank_ci_hi,
                 })
               }
             })
@@ -215,8 +227,10 @@
           'note',
           'authority_median', 'auth_ci_lo', 'auth_ci_hi', 'auth_stability',
           ...(useNull ? ['auth_null_ci_lo', 'auth_null_ci_hi', 'auth_sig'] : []),
+          'auth_rank_median', 'auth_rank_ci_lo', 'auth_rank_ci_hi',
           'hub_median', 'hub_ci_lo', 'hub_ci_hi', 'hub_stability',
           ...(useNull ? ['hub_null_ci_lo', 'hub_null_ci_hi', 'hub_sig'] : []),
+          'hub_rank_median', 'hub_rank_ci_lo', 'hub_rank_ci_hi',
         ]
       : ['note', 'authority', 'hub']
     const lines = [header.join(',')]
@@ -226,8 +240,10 @@
             r.to,
             fmtNum(r.authority), fmtNum(r.auth_ci_lo, 3), fmtNum(r.auth_ci_hi, 3), fmtNum(r.auth_stability, 3),
             ...(useNull ? [fmtNum(r.auth_null_ci_lo, 3), fmtNum(r.auth_null_ci_hi, 3), r.auth_sig ? '1' : '0'] : []),
+            fmtNum(r.auth_rank_median, 1), fmtNum(r.auth_rank_ci_lo, 1), fmtNum(r.auth_rank_ci_hi, 1),
             fmtNum(r.hub), fmtNum(r.hub_ci_lo, 3), fmtNum(r.hub_ci_hi, 3), fmtNum(r.hub_stability, 3),
             ...(useNull ? [fmtNum(r.hub_null_ci_lo, 3), fmtNum(r.hub_null_ci_hi, 3), r.hub_sig ? '1' : '0'] : []),
+            fmtNum(r.hub_rank_median, 1), fmtNum(r.hub_rank_ci_lo, 1), fmtNum(r.hub_rank_ci_hi, 1),
           ]
         : [r.to, fmtNum(r.authority), fmtNum(r.hub)]
       lines.push(fields.map(csvEscape).join(','))
@@ -277,6 +293,7 @@
         {#if nullEnabled}
           <th scope="col" aria-label="Configuration-model null 95% CI for authority">Null CI (A)</th>
         {/if}
+        <th scope="col" aria-label="95% CI on authority rank across resamples (1 = highest, lower is better)">Rank (A)</th>
         <th scope="col" aria-label="Top-10 frequency for authority">Top-10 (A)</th>
       {/if}
       <th scope="col">Hub</th>
@@ -285,6 +302,7 @@
         {#if nullEnabled}
           <th scope="col" aria-label="Configuration-model null 95% CI for hub">Null CI (H)</th>
         {/if}
+        <th scope="col" aria-label="95% CI on hub rank across resamples (1 = highest, lower is better)">Rank (H)</th>
         <th scope="col" aria-label="Top-10 frequency for hub">Top-10 (H)</th>
       {/if}
     </tr>
@@ -334,6 +352,13 @@
                     {/if}
                   </td>
                 {/if}
+                <td class={MEASURE}>
+                  {#if Number.isFinite(node.auth_rank_ci_lo) && Number.isFinite(node.auth_rank_ci_hi)}
+                    [{Math.round(node.auth_rank_ci_lo)}, {Math.round(node.auth_rank_ci_hi)}]
+                  {:else}
+                    —
+                  {/if}
+                </td>
                 <td class={MEASURE}>{((node.auth_stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}
               <td class={MEASURE}>{node.hub}</td>
@@ -352,6 +377,13 @@
                     {/if}
                   </td>
                 {/if}
+                <td class={MEASURE}>
+                  {#if Number.isFinite(node.hub_rank_ci_lo) && Number.isFinite(node.hub_rank_ci_hi)}
+                    [{Math.round(node.hub_rank_ci_lo)}, {Math.round(node.hub_rank_ci_hi)}]
+                  {:else}
+                    —
+                  {/if}
+                </td>
                 <td class={MEASURE}>{((node.hub_stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}
             </tr>

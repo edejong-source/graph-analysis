@@ -57,6 +57,13 @@ export interface BootstrapAggregate {
   ci_hi: number    // 97.5th percentile
   stability: number // top-10 frequency in [0, 1]
   n: number        // number of resamples that produced a finite value
+  // Per-resample rank (1 = highest measure). 95% rank-CI is more directly
+  // actionable than value-CI for "what should I link" — "rank 3 with CI [2, 7]"
+  // tells you "solidly a top candidate" without needing to interpret an
+  // arbitrary value scale.
+  rank_median: number
+  rank_ci_lo: number
+  rank_ci_hi: number
 }
 
 export type BootstrapScalarMap = { [to: string]: BootstrapAggregate }

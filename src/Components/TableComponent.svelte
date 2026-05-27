@@ -65,6 +65,9 @@
     null_ci_lo?: number
     null_ci_hi?: number
     sig?: boolean
+    rank_median?: number
+    rank_ci_lo?: number
+    rank_ci_hi?: number
   }
 
   $: currNode = currFile?.path
@@ -133,7 +136,7 @@
     const lesser = ascOrder ? -1 : 1
     const componentResults: ComponentResults[] = []
     Object.keys(agg).forEach((to) => {
-      const { median, ci_lo, ci_hi, stability, n } = agg[to]
+      const { median, ci_lo, ci_hi, stability, n, rank_median, rank_ci_lo, rank_ci_hi } = agg[to]
       if (!(noInfinity && !Number.isFinite(median)) && !(noZero && median === 0)) {
         const resolved = !to.endsWith('.md') || isInVault(app, to)
         const linked = isLinked(resolvedLinks, currNode, to, false)
@@ -161,6 +164,9 @@
           null_ci_lo: nullRec?.ci_lo,
           null_ci_hi: nullRec?.ci_hi,
           sig,
+          rank_median,
+          rank_ci_lo,
+          rank_ci_hi,
         })
       }
     })
@@ -217,13 +223,26 @@
     if (!promiseSortedResults) return
     const data = await promiseSortedResults
     const useCI = bootstrapEnabled && currSubtypeInfo?.supportsBootstrap
+    const useNull = useCI && nullEnabled
     const header = useCI
-      ? ['note', 'median', 'ci_lo', 'ci_hi', 'stability', 'n']
+      ? [
+          'note', 'median', 'ci_lo', 'ci_hi',
+          ...(useNull ? ['null_ci_lo', 'null_ci_hi', 'sig'] : []),
+          'rank_median', 'rank_ci_lo', 'rank_ci_hi',
+          'stability', 'n',
+        ]
       : ['note', 'measure', 'extra']
     const lines = [header.join(',')]
     for (const r of data) {
       const fields = useCI
-        ? [r.to, fmtNum(r.measure), fmtNum(r.ci_lo), fmtNum(r.ci_hi), fmtNum(r.stability, 3), String(r.n ?? '')]
+        ? [
+            r.to, fmtNum(r.measure), fmtNum(r.ci_lo), fmtNum(r.ci_hi),
+            ...(useNull
+              ? [fmtNum(r.null_ci_lo, 3), fmtNum(r.null_ci_hi, 3), r.sig ? '1' : '0']
+              : []),
+            fmtNum(r.rank_median, 1), fmtNum(r.rank_ci_lo, 1), fmtNum(r.rank_ci_hi, 1),
+            fmtNum(r.stability, 3), String(r.n ?? ''),
+          ]
         : [r.to, fmtNum(r.measure), (r.extra ?? []).join(';')]
       lines.push(fields.map(csvEscape).join(','))
     }
@@ -272,6 +291,7 @@
         {#if nullEnabled}
           <th scope="col" aria-label="Configuration-model null 95% CI (degree-preserving random graph)">Null 95% CI</th>
         {/if}
+        <th scope="col" aria-label="95% CI on this note's rank across resamples (1 = highest measure, lower is better)">Rank 95%</th>
         <th scope="col" aria-label="Fraction of resamples where this note ranked in the top 10">Top-10</th>
       {/if}
     </tr>
@@ -327,6 +347,13 @@
                     {/if}
                   </td>
                 {/if}
+                <td class={MEASURE}>
+                  {#if Number.isFinite(node.rank_ci_lo) && Number.isFinite(node.rank_ci_hi)}
+                    [{Math.round(node.rank_ci_lo)}, {Math.round(node.rank_ci_hi)}]
+                  {:else}
+                    —
+                  {/if}
+                </td>
                 <td class={MEASURE}>{((node.stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}
             </tr>
