@@ -33,9 +33,46 @@
   import { onMount } from 'svelte'
   import FaLink from 'svelte-icons/fa/FaLink.svelte'
   import InfiniteScroll from 'svelte-infinite-scroll'
+  import CIBar from './CIBar.svelte'
   import ExtensionIcon from './ExtensionIcon.svelte'
   import ImgThumbnail from './ImgThumbnail.svelte'
   import SubtypeOptions from './SubtypeOptions.svelte'
+
+  function computeCIRange(
+    data: ComponentResults[],
+    loKey: 'auth_ci_lo' | 'hub_ci_lo',
+    hiKey: 'auth_ci_hi' | 'hub_ci_hi',
+    nullLoKey: 'auth_null_ci_lo' | 'hub_null_ci_lo',
+    nullHiKey: 'auth_null_ci_hi' | 'hub_null_ci_hi',
+    withNull: boolean,
+  ): [number, number] {
+    let lo = Infinity, hi = -Infinity
+    for (const r of data) {
+      const l = r[loKey], h = r[hiKey]
+      if (Number.isFinite(l)) lo = Math.min(lo, l as number)
+      if (Number.isFinite(h)) hi = Math.max(hi, h as number)
+      if (withNull) {
+        const nl = r[nullLoKey], nh = r[nullHiKey]
+        if (Number.isFinite(nl)) lo = Math.min(lo, nl as number)
+        if (Number.isFinite(nh)) hi = Math.max(hi, nh as number)
+      }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [0, 1]
+    if (lo === hi) return [lo - 0.5, hi + 0.5]
+    return [lo, hi]
+  }
+
+  function computeRankRange(
+    data: ComponentResults[],
+    hiKey: 'auth_rank_ci_hi' | 'hub_rank_ci_hi',
+  ): [number, number] {
+    let hi = 1
+    for (const r of data) {
+      const v = r[hiKey]
+      if (Number.isFinite(v)) hi = Math.max(hi, v as number)
+    }
+    return [1, Math.max(2, hi)]
+  }
 
   export let app: App
   export let plugin: GraphAnalysisPlugin
@@ -86,6 +123,25 @@
   let visibleData: ComponentResults[] = []
   let page = 0
   let blockSwitch = false
+
+  $: authCIRange = computeCIRange(
+    visibleData,
+    'auth_ci_lo',
+    'auth_ci_hi',
+    'auth_null_ci_lo',
+    'auth_null_ci_hi',
+    nullEnabled,
+  )
+  $: hubCIRange = computeCIRange(
+    visibleData,
+    'hub_ci_lo',
+    'hub_ci_hi',
+    'hub_null_ci_lo',
+    'hub_null_ci_hi',
+    nullEnabled,
+  )
+  $: authRankRange = computeRankRange(visibleData, 'auth_rank_ci_hi')
+  $: hubRankRange = computeRankRange(visibleData, 'hub_rank_ci_hi')
 
   app.workspace.on('file-open', (activeFile) => {
     blockSwitch = true
@@ -289,19 +345,13 @@
       <th scope="col">Note</th>
       <th scope="col">Authority</th>
       {#if bootstrapEnabled}
-        <th scope="col" aria-label="95% bootstrap CI for authority">CI (A)</th>
-        {#if nullEnabled}
-          <th scope="col" aria-label="Configuration-model null 95% CI for authority">Null CI (A)</th>
-        {/if}
+        <th scope="col" aria-label="95% bootstrap CI for authority (null overlay when enabled)">CI (A)</th>
         <th scope="col" aria-label="95% CI on authority rank across resamples (1 = highest, lower is better)">Rank (A)</th>
         <th scope="col" aria-label="Top-10 frequency for authority">Top-10 (A)</th>
       {/if}
       <th scope="col">Hub</th>
       {#if bootstrapEnabled}
-        <th scope="col" aria-label="95% bootstrap CI for hub">CI (H)</th>
-        {#if nullEnabled}
-          <th scope="col" aria-label="Configuration-model null 95% CI for hub">Null CI (H)</th>
-        {/if}
+        <th scope="col" aria-label="95% bootstrap CI for hub (null overlay when enabled)">CI (H)</th>
         <th scope="col" aria-label="95% CI on hub rank across resamples (1 = highest, lower is better)">Rank (H)</th>
         <th scope="col" aria-label="Top-10 frequency for hub">Top-10 (H)</th>
       {/if}
@@ -339,50 +389,50 @@
               <td class={MEASURE}>{node.authority}</td>
               {#if bootstrapEnabled}
                 <td class={MEASURE}>
-                  [{Number.isFinite(node.auth_ci_lo) ? node.auth_ci_lo.toFixed(3) : '—'},
-                  {Number.isFinite(node.auth_ci_hi) ? node.auth_ci_hi.toFixed(3) : '—'}]
+                  <CIBar
+                    ciLo={node.auth_ci_lo}
+                    ciHi={node.auth_ci_hi}
+                    median={node.authority}
+                    nullCiLo={nullEnabled ? node.auth_null_ci_lo : undefined}
+                    nullCiHi={nullEnabled ? node.auth_null_ci_hi : undefined}
+                    range={authCIRange}
+                    sig={!!node.auth_sig}
+                    label={`Authority 95% CI [${(node.auth_ci_lo ?? 0).toFixed(3)}, ${(node.auth_ci_hi ?? 0).toFixed(3)}]${nullEnabled && Number.isFinite(node.auth_null_ci_lo) ? `; null [${(node.auth_null_ci_lo ?? 0).toFixed(3)}, ${(node.auth_null_ci_hi ?? 0).toFixed(3)}]${node.auth_sig ? ' (significant)' : ''}` : ''}`}
+                  />
                 </td>
-                {#if nullEnabled}
-                  <td class={MEASURE}>
-                    {#if node.auth_null_ci_lo !== undefined && node.auth_null_ci_hi !== undefined}
-                      [{Number.isFinite(node.auth_null_ci_lo) ? node.auth_null_ci_lo.toFixed(3) : '—'},
-                      {Number.isFinite(node.auth_null_ci_hi) ? node.auth_null_ci_hi.toFixed(3) : '—'}]
-                    {:else}
-                      —
-                    {/if}
-                  </td>
-                {/if}
                 <td class={MEASURE}>
-                  {#if Number.isFinite(node.auth_rank_ci_lo) && Number.isFinite(node.auth_rank_ci_hi)}
-                    [{Math.round(node.auth_rank_ci_lo)}, {Math.round(node.auth_rank_ci_hi)}]
-                  {:else}
-                    —
-                  {/if}
+                  <CIBar
+                    ciLo={node.auth_rank_ci_lo}
+                    ciHi={node.auth_rank_ci_hi}
+                    median={node.auth_rank_median}
+                    range={authRankRange}
+                    label={`Authority rank 95% CI [${Number.isFinite(node.auth_rank_ci_lo) ? Math.round(node.auth_rank_ci_lo) : '—'}, ${Number.isFinite(node.auth_rank_ci_hi) ? Math.round(node.auth_rank_ci_hi) : '—'}]`}
+                  />
                 </td>
                 <td class={MEASURE}>{((node.auth_stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}
               <td class={MEASURE}>{node.hub}</td>
               {#if bootstrapEnabled}
                 <td class={MEASURE}>
-                  [{Number.isFinite(node.hub_ci_lo) ? node.hub_ci_lo.toFixed(3) : '—'},
-                  {Number.isFinite(node.hub_ci_hi) ? node.hub_ci_hi.toFixed(3) : '—'}]
+                  <CIBar
+                    ciLo={node.hub_ci_lo}
+                    ciHi={node.hub_ci_hi}
+                    median={node.hub}
+                    nullCiLo={nullEnabled ? node.hub_null_ci_lo : undefined}
+                    nullCiHi={nullEnabled ? node.hub_null_ci_hi : undefined}
+                    range={hubCIRange}
+                    sig={!!node.hub_sig}
+                    label={`Hub 95% CI [${(node.hub_ci_lo ?? 0).toFixed(3)}, ${(node.hub_ci_hi ?? 0).toFixed(3)}]${nullEnabled && Number.isFinite(node.hub_null_ci_lo) ? `; null [${(node.hub_null_ci_lo ?? 0).toFixed(3)}, ${(node.hub_null_ci_hi ?? 0).toFixed(3)}]${node.hub_sig ? ' (significant)' : ''}` : ''}`}
+                  />
                 </td>
-                {#if nullEnabled}
-                  <td class={MEASURE}>
-                    {#if node.hub_null_ci_lo !== undefined && node.hub_null_ci_hi !== undefined}
-                      [{Number.isFinite(node.hub_null_ci_lo) ? node.hub_null_ci_lo.toFixed(3) : '—'},
-                      {Number.isFinite(node.hub_null_ci_hi) ? node.hub_null_ci_hi.toFixed(3) : '—'}]
-                    {:else}
-                      —
-                    {/if}
-                  </td>
-                {/if}
                 <td class={MEASURE}>
-                  {#if Number.isFinite(node.hub_rank_ci_lo) && Number.isFinite(node.hub_rank_ci_hi)}
-                    [{Math.round(node.hub_rank_ci_lo)}, {Math.round(node.hub_rank_ci_hi)}]
-                  {:else}
-                    —
-                  {/if}
+                  <CIBar
+                    ciLo={node.hub_rank_ci_lo}
+                    ciHi={node.hub_rank_ci_hi}
+                    median={node.hub_rank_median}
+                    range={hubRankRange}
+                    label={`Hub rank 95% CI [${Number.isFinite(node.hub_rank_ci_lo) ? Math.round(node.hub_rank_ci_lo) : '—'}, ${Number.isFinite(node.hub_rank_ci_hi) ? Math.round(node.hub_rank_ci_hi) : '—'}]`}
+                  />
                 </td>
                 <td class={MEASURE}>{((node.hub_stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}

@@ -32,9 +32,33 @@
   import { onMount } from 'svelte'
   import FaLink from 'svelte-icons/fa/FaLink.svelte'
   import InfiniteScroll from 'svelte-infinite-scroll'
+  import CIBar from './CIBar.svelte'
   import ExtensionIcon from './ExtensionIcon.svelte'
   import ImgThumbnail from './ImgThumbnail.svelte'
   import SubtypeOptions from './SubtypeOptions.svelte'
+
+  function computeCIRange(data: ComponentResults[], withNull: boolean): [number, number] {
+    let lo = Infinity, hi = -Infinity
+    for (const r of data) {
+      if (Number.isFinite(r.ci_lo)) lo = Math.min(lo, r.ci_lo)
+      if (Number.isFinite(r.ci_hi)) hi = Math.max(hi, r.ci_hi)
+      if (withNull) {
+        if (Number.isFinite(r.null_ci_lo)) lo = Math.min(lo, r.null_ci_lo as number)
+        if (Number.isFinite(r.null_ci_hi)) hi = Math.max(hi, r.null_ci_hi as number)
+      }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [0, 1]
+    if (lo === hi) return [lo - 0.5, hi + 0.5]
+    return [lo, hi]
+  }
+
+  function computeRankRange(data: ComponentResults[]): [number, number] {
+    let hi = 1
+    for (const r of data) {
+      if (Number.isFinite(r.rank_ci_hi)) hi = Math.max(hi, r.rank_ci_hi as number)
+    }
+    return [1, Math.max(2, hi)]
+  }
 
   export let app: App
   export let plugin: GraphAnalysisPlugin
@@ -77,6 +101,9 @@
   let visibleData: ComponentResults[] = []
   let page = 0
   let blockSwitch = false
+
+  $: ciRange = computeCIRange(visibleData, nullEnabled)
+  $: rankRange = computeRankRange(visibleData)
 
   let { resolvedLinks } = app.metadataCache
 
@@ -287,10 +314,7 @@
       <th scope="col">Note</th>
       <th scope="col">{bootstrapEnabled && currSubtypeInfo?.supportsBootstrap ? 'Median' : 'Value'}</th>
       {#if bootstrapEnabled && currSubtypeInfo?.supportsBootstrap}
-        <th scope="col" aria-label="95% bootstrap confidence interval">95% CI</th>
-        {#if nullEnabled}
-          <th scope="col" aria-label="Configuration-model null 95% CI (degree-preserving random graph)">Null 95% CI</th>
-        {/if}
+        <th scope="col" aria-label="95% bootstrap confidence interval (with configuration-model null overlay when enabled)">95% CI</th>
         <th scope="col" aria-label="95% CI on this note's rank across resamples (1 = highest measure, lower is better)">Rank 95%</th>
         <th scope="col" aria-label="Fraction of resamples where this note ranked in the top 10">Top-10</th>
       {/if}
@@ -334,25 +358,25 @@
               <td class={MEASURE}>{Number.isFinite(node.measure) ? node.measure.toFixed(4) : '∞'}</td>
               {#if bootstrapEnabled && currSubtypeInfo?.supportsBootstrap}
                 <td class={MEASURE}>
-                  [{Number.isFinite(node.ci_lo) ? node.ci_lo.toFixed(3) : '∞'},
-                  {Number.isFinite(node.ci_hi) ? node.ci_hi.toFixed(3) : '∞'}]
+                  <CIBar
+                    ciLo={node.ci_lo}
+                    ciHi={node.ci_hi}
+                    median={node.measure}
+                    nullCiLo={nullEnabled ? node.null_ci_lo : undefined}
+                    nullCiHi={nullEnabled ? node.null_ci_hi : undefined}
+                    range={ciRange}
+                    sig={!!node.sig}
+                    label={`95% CI [${(node.ci_lo ?? 0).toFixed(3)}, ${(node.ci_hi ?? 0).toFixed(3)}]${nullEnabled && Number.isFinite(node.null_ci_lo) ? `; null [${(node.null_ci_lo ?? 0).toFixed(3)}, ${(node.null_ci_hi ?? 0).toFixed(3)}]${node.sig ? ' (significant)' : ''}` : ''}`}
+                  />
                 </td>
-                {#if nullEnabled}
-                  <td class={MEASURE}>
-                    {#if node.null_ci_lo !== undefined && node.null_ci_hi !== undefined}
-                      [{Number.isFinite(node.null_ci_lo) ? node.null_ci_lo.toFixed(3) : '∞'},
-                      {Number.isFinite(node.null_ci_hi) ? node.null_ci_hi.toFixed(3) : '∞'}]
-                    {:else}
-                      —
-                    {/if}
-                  </td>
-                {/if}
                 <td class={MEASURE}>
-                  {#if Number.isFinite(node.rank_ci_lo) && Number.isFinite(node.rank_ci_hi)}
-                    [{Math.round(node.rank_ci_lo)}, {Math.round(node.rank_ci_hi)}]
-                  {:else}
-                    —
-                  {/if}
+                  <CIBar
+                    ciLo={node.rank_ci_lo}
+                    ciHi={node.rank_ci_hi}
+                    median={node.rank_median}
+                    range={rankRange}
+                    label={`Rank 95% CI [${Number.isFinite(node.rank_ci_lo) ? Math.round(node.rank_ci_lo) : '—'}, ${Number.isFinite(node.rank_ci_hi) ? Math.round(node.rank_ci_hi) : '—'}]`}
+                  />
                 </td>
                 <td class={MEASURE}>{((node.stability ?? 0) * 100).toFixed(0)}%</td>
               {/if}
